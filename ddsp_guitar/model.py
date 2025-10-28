@@ -42,8 +42,14 @@ class TCNController(nn.Module):
 
 
 class GuitarDDSP(nn.Module):
-    def __init__(self, sample_rate=48000, num_harm=64, num_noise=8):
+    def __init__(self, sample_rate=48000, num_harm=64, num_noise=8, device=None):
         super().__init__()
+
+        if device is None:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = torch.device(device)
+
         self.encoder = Encoder()
         self.controller = TCNController()
         self.harm = HarmonicSynth(num_harm, sample_rate)
@@ -56,8 +62,15 @@ class GuitarDDSP(nn.Module):
         # Outputs: harm amps (H), noise env (K), WS (alpha,beta), tone (low_gain, mid_gain, high_gain, mid_fc, mid_Q), transient mix alpha_a
         out_dim = num_harm + num_noise + 2 + 5 + 1
         self.head = nn.Conv1d(128, out_dim, 1)
+        self.to(self.device)
 
     def forward_with_phase(self, x, f0_hz, loudness, initial_phase=None):
+        x = x.to(self.device)
+        f0_hz = f0_hz.to(self.device)
+        loudness = loudness.to(self.device)
+        if initial_phase is not None:
+            initial_phase = initial_phase.to(self.device)
+
         B, N = x.shape
         h = self.encoder(x.unsqueeze(1))
         c = self.controller(h)
