@@ -53,10 +53,11 @@ class GuitarDDSP(nn.Module):
         self.sep = TransientSeparator()
         self.sample_rate = sample_rate
 
-        out_dim = num_harm + num_noise + 2 + 3
+        # Outputs: harm amps (H), noise env (K), WS (alpha,beta), tone (low_gain, mid_gain, high_gain, mid_fc, mid_Q), transient mix alpha_a
+        out_dim = num_harm + num_noise + 2 + 5 + 1
         self.head = nn.Conv1d(128, out_dim, 1)
 
-    def forward(self, x, f0_hz, loudness):
+    def forward_with_phase(self, x, f0_hz, loudness, initial_phase=None):
         B, N = x.shape
         h = self.encoder(x.unsqueeze(1))
         c = self.controller(h)
@@ -64,19 +65,24 @@ class GuitarDDSP(nn.Module):
 
         num_harm = self.harm.num_harmonics
         num_noise = self.noise.num_bands
-        harm_amp = torch.nn.functional.softplus(p[:, :num_harm, :])
-        noise_env = torch.nn.functional.softplus(p[:, num_harm : num_harm + num_noise, :])
-        alpha = 0.5 + 4.5 * (p[:, num_harm + num_noise : num_harm + num_noise + 1, :])
-        beta = torch.relu(p[:, num_harm + num_noise + 1 : num_harm + num_noise + 2, :])
-        low = 12 * p[:, -3:-2, :]
-        mid = 12 * p[:, -2:-1, :]
-        high = 12 * p[:, -1:, :]
+        idx = 0
+        harm_amp = torch.nn.functional.softplus(p[:, idx : idx + num_harm, :]); idx += num_harm
+        noise_env = torch.nn.functional.softplus(p[:, idx : idx + num_noise, :]); idx += num_noise
+        alpha = 0.5 + 4.5 * (p[:, idx : idx + 1, :]); idx += 1
+        beta = torch.relu(p[:, idx : idx + 1, :]); idx += 1
+        low = 12 * p[:, idx : idx + 1, :]; idx += 1
+        mid_gain = 12 * p[:, idx : idx + 1, :]; idx += 1
+        high = 12 * p[:, idx : idx + 1, :]; idx += 1
+        mid_fc = 200.0 + 3800.0 * (0.5 * (p[:, idx : idx + 1, :] + 1.0)); idx += 1
+        mid_Q = 0.2 + 3.8 * (0.5 * (p[:, idx : idx + 1, :] + 1.0)); idx += 1
+        alpha_a = torch.sigmoid(p[:, idx : idx + 1, :]); idx += 1
 
         harm_amp_t = harm_amp.transpose(1, 2)  # (B,N,H)
         f0 = torch.nn.functional.interpolate(
             f0_hz.unsqueeze(1), size=N, mode="linear", align_corners=False
         ).squeeze(1)
-        y_h, _ = self.harm(f0, harm_amp_t)
+        # Per-sample f0 already sized N; harm_amp_t is per-sample; synth returns (B,N)
+        y_h, final_phase = self.harm(f0, harm_amp_t, phase=initial_phase)
         y_n = self.noise(noise_env.transpose(1, 2), N)
         y = y_h + y_n
 
@@ -85,10 +91,15 @@ class GuitarDDSP(nn.Module):
         y_s = self.ts(
             s,
             low.squeeze(1),
-            mid.squeeze(1),
-            torch.tensor(800.0, device=x.device),
-            torch.tensor(0.707, device=x.device),
+            mid_gain.squeeze(1),
+            mid_fc.squeeze(1),
+            mid_Q.squeeze(1),
             high.squeeze(1),
         )
-        y_out = y_a + y_s
-        return y_out
+        mix = alpha_a.squeeze(1)
+        y_out = mix * y_a + (1.0 - mix) * y_s
+        return y_out, final_phase
+
+    def forward(self, x, f0_hz, loudness):
+        y, _ = self.forward_with_phase(x, f0_hz, loudness, initial_phase=None)
+        return y

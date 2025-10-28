@@ -10,20 +10,37 @@ class HarmonicSynth(nn.Module):
         self.sample_rate = sample_rate
 
     def forward(self, f0_hz: torch.Tensor, amp_harm: torch.Tensor, phase: torch.Tensor | None = None):
-        # f0_hz: (B, T)
-        # amp_harm: (B, T, H) non-negative amplitudes per harmonic
-        B, T = f0_hz.shape
+        """
+        Sample-rate harmonic synthesis with cumulative phase.
+
+        Args:
+            f0_hz: (B, N) fundamental frequency in Hz per sample
+            amp_harm: (B, N, H) non-negative amplitudes per harmonic
+            phase: (B, H) optional initial phase per harmonic (radians)
+
+        Returns:
+            y: (B, N) synthesized harmonic signal
+            phase_out: (B, H) final phase per harmonic, can be fed to next block
+        """
+        B, N = f0_hz.shape
         H = self.num_harmonics
-        assert amp_harm.shape == (B, T, H)
+        assert amp_harm.shape == (B, N, H)
+        device = f0_hz.device
         if phase is None:
-            phase = torch.zeros(B, H, device=f0_hz.device)
-        # Placeholder synthesis per-frame; OLA engine should handle sample-rate synthesis.
-        block = 1
-        f0 = f0_hz  # (B,T)
-        omega = 2 * torch.pi * f0 / self.sample_rate  # (B,T)
-        t = torch.zeros(B, T, device=f0.device)
-        phases = rearrange(phase, 'b h -> b 1 h') + rearrange(omega, 'b t -> b t 1') * t.unsqueeze(-1)
-        harm_idx = torch.arange(1, H + 1, device=f0.device)
-        phases = phases * harm_idx  # (B,T,H)
-        y = (amp_harm * torch.sin(phases)).sum(dim=-1)  # (B,T)
-        return y, phase
+            phase = torch.zeros(B, H, device=device)
+
+        # Instantaneous angular frequency per sample
+        omega = 2 * torch.pi * f0_hz / self.sample_rate  # (B, N)
+        # Expand for each harmonic
+        harm_idx = torch.arange(1, H + 1, device=device).view(1, 1, H)  # (1,1,H)
+        omega_h = omega.unsqueeze(-1) * harm_idx  # (B, N, H)
+
+        # Cumulative phase for each harmonic, starting from initial phase
+        phases = torch.cumsum(omega_h, dim=1) + phase.unsqueeze(1)  # (B, N, H)
+
+        # Synthesize
+        y = (amp_harm * torch.sin(phases)).sum(dim=-1)  # (B, N)
+
+        # Final phase (last sample)
+        phase_out = torch.remainder(phases[:, -1, :], 2 * torch.pi)  # (B, H)
+        return y, phase_out
