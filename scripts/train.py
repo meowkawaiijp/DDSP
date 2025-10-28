@@ -267,7 +267,10 @@ def main():
     train_dataset = GuitarDIDataset(
         wav_dir=args.train_dir,
         sample_rate=args.sample_rate,
-        segment_seconds=args.segment_seconds
+        segment_seconds=args.segment_seconds,
+        device=device,
+        use_cache=True,
+        cache_size=200  # キャッシュサイズ
     )
     print(f"トレーニングデータ: {len(train_dataset)} サンプル")
     
@@ -278,15 +281,18 @@ def main():
         val_dataset = GuitarDIDataset(
             wav_dir=args.val_dir,
             sample_rate=args.sample_rate,
-            segment_seconds=args.segment_seconds
+            segment_seconds=args.segment_seconds,
+            device=device,
+            use_cache=True,
+            cache_size=50  # 検証データは少なめ
         )
         print(f"検証データ: {len(val_dataset)} サンプル")
         val_loader = DataLoader(
             val_dataset,
             batch_size=args.batch_size,
             shuffle=False,
-            num_workers=args.num_workers,
-            pin_memory=(device.type == 'cuda')
+            num_workers=0,  # Windows対応: 0に設定
+            pin_memory=False  # キャッシュ済みなのでFalse
         )
     else:
         print("検証データが見つかりません。スキップします。")
@@ -296,8 +302,8 @@ def main():
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=(device.type == 'cuda')
+        num_workers=0,  # Windows対応: 0に設定
+        pin_memory=False  # キャッシュ済みなのでFalse
     )
     
     # モデル
