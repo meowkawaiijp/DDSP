@@ -4,6 +4,7 @@ from torch.utils.data import Dataset, DataLoader
 from ddsp_guitar.model import GuitarDDSP
 from ddsp_guitar.losses.msstft import MultiScaleSTFTLoss
 from ddsp_guitar.losses.transient import TransientLoss
+from ddsp_guitar.data.dataset import GuitarDIDataset
 
 
 class DummyDataset(Dataset):
@@ -24,7 +25,11 @@ class DummyDataset(Dataset):
 
 
 def main():
-    ds = DummyDataset()
+    # Try real dataset if wavs exist, else fallback
+    try:
+        ds = GuitarDIDataset('/workspace/data/di_wavs', sample_rate=48000, segment_seconds=1.0)
+    except Exception:
+        ds = DummyDataset()
     dl = DataLoader(ds, batch_size=2, shuffle=True)
     model = GuitarDDSP()
     stft = MultiScaleSTFTLoss()
